@@ -12,10 +12,8 @@ HISTORY_FILE = "report_history.json"
 def save_history_to_file():
     """Save the report history to a JSON file."""
     try:
-        # Convert the history to a serializable format
         history_to_save = []
         for entry in st.session_state.report_history:
-            # Create a clean copy that can be saved as JSON
             safe_entry = {
                 "name": entry.get("name", ""),
                 "date": entry.get("date", ""),
@@ -58,6 +56,10 @@ if 'ai_report' not in st.session_state:
     st.session_state.ai_report = ""
 if 'report_history' not in st.session_state:
     st.session_state.report_history = load_history_from_file()
+if 'report_date' not in st.session_state:
+    st.session_state.report_date = ""
+if 'report_timestamp' not in st.session_state:
+    st.session_state.report_timestamp = ""
 
 # ===== APP TITLE =====
 st.title('🏥 AI-Powered Radiology Reporting Assistant')
@@ -89,7 +91,7 @@ with st.sidebar:
     # ===== TEMPLATE LIBRARY =====
     st.header("📚 Template Library")
     
-    # --- Save Current Draft as a New Template ---
+    # Save Current Draft as a New Template
     st.subheader("💾 Save Current Draft")
     new_template_name = st.text_input("Give this template a name:")
     
@@ -104,7 +106,7 @@ with st.sidebar:
     
     st.divider()
     
-    # --- Load a Saved Template ---
+    # Load a Saved Template
     st.subheader("📂 Load a Saved Template")
     
     if 'saved_templates' in st.session_state and st.session_state.saved_templates:
@@ -209,22 +211,7 @@ with col2:
 
             with st.spinner('AI is writing the report...'):
                 # ===== AI API CALL PLACEHOLDER =====
-                # To use Perplexity/OpenAI, uncomment and configure the code below
-                # ------------------------------------------------------------
-                # Example for Perplexity:
-                # from perplexity import Perplexity
-                # client = Perplexity(api_key=st.secrets["PERPLEXITY_API_KEY"])
-                # response = client.chat.completions.create(
-                #     model="sonar-pro",
-                #     messages=[
-                #         {"role": "system", "content": system_message},
-                #         {"role": "user", "content": user_prompt}
-                #     ]
-                # )
-                # ai_report = response.choices[0].message.content
-                # ------------------------------------------------------------
-                
-                # TEMPORARY SIMULATION (Delete this when using real API)
+                # TEMPORARY SIMULATION - Replace with real API when ready
                 ai_report = f"""**TECHNIQUE:** MRI brain without and with contrast.
 **FINDINGS:** {st.session_state.report_draft[:100]}... [Full AI-generated report would appear here after API integration].
 **IMPRESSION:** Findings consistent with the described observations. Clinical correlation recommended."""
@@ -235,6 +222,7 @@ with col2:
                 st.session_state.report_timestamp = datetime.datetime.now().isoformat()
                 st.success("Report generated!")
     
+    # ===== DOWNLOAD AS WORD SECTION =====
     if st.session_state.ai_report:
         st.subheader("AI-Generated Report")
         st.text_area(
@@ -245,13 +233,65 @@ with col2:
             label_visibility="collapsed"
         )
         
-        st.download_button(
-            label="📥 Download AI Report",
-            data=st.session_state.ai_report,
-            file_name=f"AI_Report_{st.session_state.patient_info.get('id', 'Unknown')}.txt",
-            mime="text/plain",
-            use_container_width=True
-        )
+        # Single "Download as Word" button
+        try:
+            # Create Word document
+            doc = Document()
+            
+            # Add title
+            doc.add_heading('RADIOLOGY REPORT', 0)
+            
+            # Add patient information
+            patient = st.session_state.get('patient_info', {})
+            if patient:
+                doc.add_paragraph(f"Patient: {patient.get('name', 'N/A')}")
+                doc.add_paragraph(f"Patient ID: {patient.get('id', 'N/A')}")
+                doc.add_paragraph(f"Age/Sex: {patient.get('age', 'N/A')}/{patient.get('sex', 'N/A')}")
+                if patient.get('accession'):
+                    doc.add_paragraph(f"Accession #: {patient.get('accession')}")
+            
+            doc.add_paragraph(f"Report Date: {st.session_state.get('report_date', 'N/A')}")
+            doc.add_paragraph()  # Empty line
+            
+            # Add the AI report content
+            report_lines = st.session_state.ai_report.split('\n')
+            for line in report_lines:
+                if line.strip():  # Only add non-empty lines
+                    # Check for bold markers and format accordingly
+                    if '**' in line:
+                        # Simple handling for bold text
+                        clean_line = line.replace('**', '')
+                        para = doc.add_paragraph(clean_line.strip())
+                        # Can't easily add bold without runs, but this works for basic text
+                    else:
+                        doc.add_paragraph(line.strip())
+            
+            # Save to bytes buffer
+            doc_buffer = BytesIO()
+            doc.save(doc_buffer)
+            doc_buffer.seek(0)
+            
+            # Download button
+            st.download_button(
+                label="📄 Download Report as Word",
+                data=doc_buffer,
+                file_name=f"Rad_Report_{st.session_state.patient_info.get('id', 'Unknown')}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                help="Download as Microsoft Word document (.docx)",
+                use_container_width=True,
+                type="primary"
+            )
+            
+        except Exception as e:
+            # Fallback to text if Word creation fails
+            st.error(f"Word document creation error: {str(e)[:100]}")
+            st.download_button(
+                label="📥 Download Report as Text (Fallback)",
+                data=st.session_state.ai_report,
+                file_name=f"Report_{st.session_state.patient_info.get('id', 'Unknown')}.txt",
+                mime="text/plain",
+                use_container_width=True
+            )
     else:
         st.info("👈 First, fill in patient info in the sidebar and type your draft findings in the left column.")
         st.markdown("""
@@ -265,7 +305,7 @@ with col2:
 st.divider()
 st.header("📜 Report History")
 
-# --- Save the current report to history ---
+# Save the current report to history
 st.subheader("💾 Save Current Report")
 report_to_save_name = st.text_input("Name for this report (e.g., PatientName_Date):")
 
@@ -295,7 +335,7 @@ if st.button("Save to History", key="save_history_button"):
 
 st.divider()
 
-# --- Browse and Load from History ---
+# Browse and Load from History
 st.subheader("📂 Load Past Report")
 
 if st.session_state.report_history:
@@ -353,69 +393,11 @@ if st.session_state.report_history:
 else:
     st.info("No reports in history yet. Save your first report above!")
 
-# In your right column, where you display st.session_state.ai_report
-if st.session_state.ai_report:
-    st.subheader("AI-Generated Report")
-    st.text_area(
-        "",
-        value=st.session_state.ai_report,
-        height=400,
-        key="ai_report_display",
-        label_visibility="collapsed"
-    )
-    
-    # === SINGLE "DOWNLOAD AS WORD" BUTTON ===
-    try:
-        from docx import Document
-        from io import BytesIO
-        
-        # Create a new Word document
-        doc = Document()
-        
-        # Add title and patient info
-        doc.add_heading('RADIOLOGY REPORT', 0)
-        
-        patient = st.session_state.get('patient_info', {})
-        if patient:
-            doc.add_paragraph(f"Patient: {patient.get('name', 'N/A')}")
-            doc.add_paragraph(f"Patient ID: {patient.get('id', 'N/A')}")
-            doc.add_paragraph(f"Age/Sex: {patient.get('age', 'N/A')}/{patient.get('sex', 'N/A')}")
-            if patient.get('accession'):
-                doc.add_paragraph(f"Accession #: {patient.get('accession')}")
-        
-        doc.add_paragraph(f"Report Date: {st.session_state.get('report_date', 'N/A')}")
-        doc.add_paragraph()  # Empty line
-        
-        # Add the AI report content
-        # Split into paragraphs for better formatting
-        report_lines = st.session_state.ai_report.split('\n')
-        for line in report_lines:
-            if line.strip():  # Only add non-empty lines
-                doc.add_paragraph(line.strip())
-        
-        # Save document to a BytesIO buffer
-        doc_buffer = BytesIO()
-        doc.save(doc_buffer)
-        doc_buffer.seek(0)  # Move to start of buffer
-        
-        # Single download button for Word document
-        st.download_button(
-            label="📄 Download Report as Word",
-            data=doc_buffer,
-            file_name=f"Rad_Report_{st.session_state.patient_info.get('id', 'Unknown')}.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            help="Download as Microsoft Word document (.docx)",
-            use_container_width=True,
-            type="primary"  # Makes it stand out as the main action
-        )
-        
-    except Exception as e:
-        # Fallback to text download if Word creation fails
-        st.error(f"Word creation failed: {str(e)[:50]}...")
-        st.download_button(
-            label="📥 Download Report as Text (Fallback)",
-            data=st.session_state.ai_report,
-            file_name=f"Report_{st.session_state.patient_info.get('id', 'Unknown')}.txt",
-            mime="text/plain",
-            use_container_width=True
-        )
+# ===== BOTTOM SECTION =====
+st.divider()
+st.subheader("💾 Recent Drafts")
+if st.session_state.report_draft:
+    st.caption("Your current draft is auto-saved. Copy it for later use:")
+    st.code(st.session_state.report_draft[:500] + "..." if len(st.session_state.report_draft) > 500 else st.session_state.report_draft, language="text")
+else:
+    st.caption("Start typing in the left column to see your draft appear here.")
