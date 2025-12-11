@@ -361,3 +361,48 @@ if st.session_state.report_draft:
     st.code(st.session_state.report_draft[:500] + "..." if len(st.session_state.report_draft) > 500 else st.session_state.report_draft, language="text")
 else:
     st.caption("Start typing in the left column to see your draft appear here.")
+# After your existing text download button, add this:
+if st.session_state.ai_report:
+    # ... your existing code to display the report ...
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        # Your existing text download button
+        st.download_button(
+            label="📥 Download as Text",
+            data=st.session_state.ai_report,
+            file_name=f"Report_{patient_id}.txt",
+            mime="text/plain",
+            use_container_width=True
+        )
+    with col2:
+        # NEW: Word document download button
+        from docx import Document
+        from io import BytesIO
+        
+        # Create a new Word document
+        doc = Document()
+        doc.add_heading('Radiology Report', 0)
+        doc.add_paragraph(f"Patient: {patient.get('name', 'N/A')}")
+        doc.add_paragraph(f"ID: {patient.get('id', 'N/A')}")
+        doc.add_paragraph(f"Date: {st.session_state.get('report_date', 'N/A')}")
+        doc.add_paragraph("")  # Empty line
+        
+        # Add the main report content
+        doc.add_heading('Report', level=1)
+        # Simple formatting: split by double newlines for paragraphs
+        for part in st.session_state.ai_report.split('\n\n'):
+            doc.add_paragraph(part)
+        
+        # Save document to a BytesIO stream
+        doc_io = BytesIO()
+        doc.save(doc_io)
+        doc_io.seek(0)
+        
+        st.download_button(
+            label="📄 Download as Word",
+            data=doc_io,
+            file_name=f"Report_{patient_id}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True
+        )
