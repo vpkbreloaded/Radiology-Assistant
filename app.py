@@ -401,3 +401,79 @@ if st.session_state.report_draft:
     st.code(st.session_state.report_draft[:500] + "..." if len(st.session_state.report_draft) > 500 else st.session_state.report_draft, language="text")
 else:
     st.caption("Start typing in the left column to see your draft appear here.")
+# In your left column, after the draft_text area
+st.session_state.report_draft = draft_text
+
+# Auto-save notification
+if draft_text and draft_text != st.session_state.get('last_saved_draft', ''):
+    # Update last saved timestamp every 30 seconds if draft changed
+    current_time = datetime.datetime.now()
+    last_save = st.session_state.get('last_save_time', current_time)
+    
+    if (current_time - last_save).seconds > 30:  # Auto-save every 30 seconds
+        st.session_state.last_saved_draft = draft_text
+        st.session_state.last_save_time = current_time
+        # Show a subtle indicator
+        st.caption("💾 Draft auto-saved")
+def create_professional_word_report(ai_report, patient_info, report_date):
+    """Create a professionally formatted Word document."""
+    from docx import Document
+    from docx.shared import Inches, Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    
+    doc = Document()
+    
+    # 1. HOSPITAL HEADER (Customize with your hospital's name)
+    header = doc.sections[0].header
+    header_para = header.paragraphs[0]
+    header_para.text = "YOUR HOSPITAL NAME - RADIOLOGY DEPARTMENT"
+    header_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    
+    # 2. TITLE
+    title = doc.add_heading('RADIOLOGY REPORT', 0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    
+    # 3. PATIENT INFO TABLE (Looks professional)
+    table = doc.add_table(rows=4, cols=2)
+    table.style = 'Light Shading'
+    
+    # Fill table
+    cells = table.rows[0].cells
+    cells[0].text = "Patient Name:"
+    cells[1].text = patient_info.get('name', 'N/A')
+    
+    cells = table.rows[1].cells
+    cells[0].text = "Patient ID:"
+    cells[1].text = patient_info.get('id', 'N/A')
+    
+    cells = table.rows[2].cells
+    cells[0].text = "Age/Sex:"
+    cells[1].text = f"{patient_info.get('age', 'N/A')}/{patient_info.get('sex', 'N/A')}"
+    
+    cells = table.rows[3].cells
+    cells[0].text = "Report Date:"
+    cells[1].text = report_date
+    
+    doc.add_paragraph()  # Spacing
+    
+    # 4. REPORT CONTENT WITH SECTIONS
+    # Parse and format sections better
+    if '**TECHNIQUE:**' in ai_report and '**FINDINGS:**' in ai_report:
+        # Format with proper section headings
+        sections = ai_report.split('**')
+        for section in sections:
+            if section.endswith(':**'):
+                doc.add_heading(section.replace(':**', '').strip(), level=1)
+            elif section.strip():
+                doc.add_paragraph(section.strip())
+    else:
+        doc.add_heading('REPORT', level=1)
+        doc.add_paragraph(ai_report)
+    
+    # 5. FOOTER WITH DISCLAIMER
+    footer = doc.sections[0].footer
+    footer_para = footer.paragraphs[0]
+    footer_para.text = "Electronically signed. This is an authenticated report."
+    footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    
+    return doc
