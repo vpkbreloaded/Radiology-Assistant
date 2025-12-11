@@ -1,6 +1,6 @@
 """
 AI-Powered Professional Radiology Reporting Assistant
-Version 3.2 - Enhanced with User-Controlled Differentials & Improved Formatting
+Version 4.0 - Enhanced with Template Upload, Contrast Options & Better Differential UI
 """
 
 import streamlit as st
@@ -15,12 +15,18 @@ import datetime
 import hashlib
 import pandas as pd
 from collections import defaultdict
+import tempfile
+from docx import Document as DocxDocument
 
 # ===== CONFIGURATION =====
 CONFIG_FILE = "radiology_config.json"
 HISTORY_FILE = "report_history.json"
 TEMPLATES_FILE = "saved_templates.json"
 USER_FILE = "users.json"
+UPLOADED_TEMPLATES_DIR = "uploaded_templates"
+
+# Create directories if they don't exist
+os.makedirs(UPLOADED_TEMPLATES_DIR, exist_ok=True)
 
 # ===== DIFFERENTIAL DIAGNOSIS DATABASE =====
 DIFFERENTIAL_DATABASE = {
@@ -55,12 +61,13 @@ DIFFERENTIAL_DATABASE = {
     ]
 }
 
-# ===== TEMPLATE SYSTEM WITH HEADINGS =====
-class TemplateSystem:
-    """Enhanced template system with heading support."""
+# ===== ENHANCED TEMPLATE SYSTEM =====
+class EnhancedTemplateSystem:
+    """Enhanced template system with Word upload support."""
     
     def __init__(self):
         self.templates = {}
+        self.uploaded_templates = {}
         self.load_templates()
     
     def load_templates(self):
@@ -68,26 +75,79 @@ class TemplateSystem:
         if os.path.exists(TEMPLATES_FILE):
             with open(TEMPLATES_FILE, 'r') as f:
                 self.templates = json.load(f)
+        
+        # Load uploaded templates info
+        uploaded_info_file = os.path.join(UPLOADED_TEMPLATES_DIR, "uploaded_templates.json")
+        if os.path.exists(uploaded_info_file):
+            with open(uploaded_info_file, 'r') as f:
+                self.uploaded_templates = json.load(f)
     
     def save_templates(self):
         """Save templates to file."""
         with open(TEMPLATES_FILE, 'w') as f:
             json.dump(self.templates, f, indent=2)
+        
+        # Save uploaded templates info
+        uploaded_info_file = os.path.join(UPLOADED_TEMPLATES_DIR, "uploaded_templates.json")
+        with open(uploaded_info_file, 'w') as f:
+            json.dump(self.uploaded_templates, f, indent=2)
     
-    def add_template(self, name, content, template_type="findings"):
-        """Add a new template with heading."""
+    def add_template(self, name, content, template_type="findings", source="manual"):
+        """Add a new template."""
         self.templates[name] = {
             "content": content,
             "type": template_type,
             "created_by": st.session_state.current_user,
-            "created_date": datetime.datetime.now().strftime("%Y-%m-%d"),
-            "used_count": 0
+            "created_date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "used_count": 0,
+            "source": source
         }
         self.save_templates()
     
+    def upload_word_template(self, file, template_name, template_type="findings"):
+        """Upload and parse a Word document as template."""
+        try:
+            # Save uploaded file
+            file_path = os.path.join(UPLOADED_TEMPLATES_DIR, f"{template_name}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.docx")
+            with open(file_path, "wb") as f:
+                f.write(file.getbuffer())
+            
+            # Parse Word document
+            doc = DocxDocument(BytesIO(file.getvalue()))
+            content = []
+            for paragraph in doc.paragraphs:
+                if paragraph.text.strip():
+                    content.append(paragraph.text.strip())
+            
+            template_content = "\n".join(content)
+            
+            # Save template info
+            self.uploaded_templates[template_name] = {
+                "filename": os.path.basename(file_path),
+                "type": template_type,
+                "uploaded_by": st.session_state.current_user,
+                "upload_date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "content": template_content
+            }
+            
+            # Also add to regular templates for easy access
+            self.add_template(template_name, template_content, template_type, source="word_upload")
+            
+            self.save_templates()
+            return True, template_content
+        
+        except Exception as e:
+            return False, str(e)
+    
     def get_template_heading(self, template_name):
         """Get heading format for a template."""
-        template = self.templates.get(template_name, {})
+        if template_name in self.templates:
+            template = self.templates[template_name]
+        elif template_name in self.uploaded_templates:
+            template = self.uploaded_templates[template_name]
+        else:
+            return template_name.upper()
+        
         template_type = template.get("type", "findings")
         
         heading_map = {
@@ -95,25 +155,30 @@ class TemplateSystem:
             "findings": "FINDINGS",
             "impression": "IMPRESSION",
             "clinical": "CLINICAL HISTORY",
-            "differential": "DIFFERENTIAL DIAGNOSIS"
+            "differential": "DIFFERENTIAL DIAGNOSIS",
+            "comparison": "COMPARISON"
         }
         
         return heading_map.get(template_type, template_name.upper())
     
     def apply_template(self, template_name, current_text=""):
         """Apply a template with proper heading."""
-        if template_name not in self.templates:
+        if template_name not in self.templates and template_name not in self.uploaded_templates:
             return current_text
         
-        template = self.templates[template_name]
+        if template_name in self.templates:
+            template = self.templates[template_name]
+            content = template['content']
+            # Increment usage count
+            template["used_count"] = template.get("used_count", 0) + 1
+        else:
+            template = self.uploaded_templates[template_name]
+            content = template['content']
+        
         heading = self.get_template_heading(template_name)
         
-        # Increment usage count
-        template["used_count"] = template.get("used_count", 0) + 1
-        self.save_templates()
-        
-        # Format with heading (no bold in final report - will be formatted in Word)
-        formatted_template = f"\n\n{heading.upper()}:\n{template['content']}"
+        # Format with heading
+        formatted_template = f"\n\n{heading.upper()}:\n{content}"
         
         if current_text:
             return current_text + formatted_template
@@ -125,7 +190,20 @@ class TemplateSystem:
         for name, data in self.templates.items():
             if data.get("created_by") == username:
                 user_templates[name] = data
+        
+        for name, data in self.uploaded_templates.items():
+            if data.get("uploaded_by") == username:
+                user_templates[name] = data
+        
         return user_templates
+    
+    def get_all_templates(self):
+        """Get all templates including uploaded ones."""
+        all_templates = self.templates.copy()
+        for name, data in self.uploaded_templates.items():
+            if name not in all_templates:
+                all_templates[name] = data
+        return all_templates
 
 def generate_differential_diagnosis(text):
     """Generate differential diagnosis based on findings."""
@@ -133,22 +211,22 @@ def generate_differential_diagnosis(text):
     results = []
     
     # Check for patterns in various categories
-    if any(word in text_lower for word in ["enhanc", "mass", "tumor", "neoplasm"]):
+    if any(word in text_lower for word in ["enhanc", "mass", "tumor", "neoplasm", "gadolinium"]):
         results.extend(DIFFERENTIAL_DATABASE["brain_lesion_enhancing"])
     
-    if any(word in text_lower for word in ["white matter", "flair", "hyperintensity", "msa"]):
+    if any(word in text_lower for word in ["white matter", "flair", "hyperintensity", "msa", "demyelinating"]):
         results.extend(DIFFERENTIAL_DATABASE["white_matter"])
     
-    if any(word in text_lower for word in ["stroke", "infarct", "ischemi", "mca"]):
+    if any(word in text_lower for word in ["stroke", "infarct", "ischemi", "mca", "aca", "pca"]):
         results.extend(DIFFERENTIAL_DATABASE["stroke"])
     
-    if any(word in text_lower for word in ["spinal", "cord", "disc", "vertebral"]):
+    if any(word in text_lower for word in ["spinal", "cord", "disc", "vertebral", "canal", "foraminal"]):
         results.extend(DIFFERENTIAL_DATABASE["spinal_lesion"])
     
-    if any(word in text_lower for word in ["lung", "pulmonary", "nodule", "chest"]):
+    if any(word in text_lower for word in ["lung", "pulmonary", "nodule", "chest", "thorax", "pleural"]):
         results.extend(DIFFERENTIAL_DATABASE["lung_nodule"])
     
-    if any(word in text_lower for word in ["liver", "hepatic", "lesion", "hepato"]):
+    if any(word in text_lower for word in ["liver", "hepatic", "lesion", "hepato", "portal"]):
         results.extend(DIFFERENTIAL_DATABASE["liver_lesion"])
     
     # Remove duplicates
@@ -162,40 +240,40 @@ def generate_differential_diagnosis(text):
     
     return unique_results[:6]  # Return top 6 suggestions
 
-def create_word_document(patient_info, report_text, report_date, include_hospital_header=False):
-    """Create a Word document with proper formatting."""
+def create_word_document(patient_info, report_text, report_date, technique_info=None):
+    """Create a Word document with proper formatting including patient data."""
     doc = Document()
     
-    # Optional: Hospital header
-    if include_hospital_header:
-        title = doc.add_heading('RADIOLOGY REPORT', 0)
-        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        doc.add_paragraph()  # Add spacing
+    # Title
+    title = doc.add_heading('RADIOLOGY REPORT', 0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     
-    # Patient Information Section
+    # Add spacing
+    doc.add_paragraph()
+    
+    # PATIENT INFORMATION Section - Always included
     doc.add_heading('PATIENT INFORMATION', level=1)
     
-    patient_table = doc.add_table(rows=4, cols=2)
-    patient_table.style = 'Light Shading'
+    # Create a table for patient data
+    patient_table = doc.add_table(rows=5, cols=2)
+    patient_table.style = 'Light Grid'
     
     # Fill patient table
-    cells = patient_table.rows[0].cells
-    cells[0].text = "Patient Name:"
-    cells[1].text = patient_info.get('name', 'Not provided')
+    rows_data = [
+        ("Patient Name:", patient_info.get('name', 'Not provided')),
+        ("Patient ID:", patient_info.get('id', 'Not provided')),
+        ("Age/Sex:", f"{patient_info.get('age', 'N/A')}/{patient_info.get('sex', 'N/A')}"),
+        ("Clinical History:", patient_info.get('history', 'Not provided')),
+        ("Report Date:", report_date if report_date else datetime.datetime.now().strftime("%Y-%m-%d"))
+    ]
     
-    cells = patient_table.rows[1].cells
-    cells[0].text = "Patient ID:"
-    cells[1].text = patient_info.get('id', 'Not provided')
+    for i, (label, value) in enumerate(rows_data):
+        cells = patient_table.rows[i].cells
+        cells[0].text = label
+        cells[1].text = str(value)
     
-    cells = patient_table.rows[2].cells
-    cells[0].text = "Age/Sex:"
-    cells[1].text = f"{patient_info.get('age', '')}/{patient_info.get('sex', '')}".strip('/')
-    
-    cells = patient_table.rows[3].cells
-    cells[0].text = "Report Date:"
-    cells[1].text = report_date if report_date else datetime.datetime.now().strftime("%Y-%m-%d")
-    
-    doc.add_paragraph()  # Add spacing
+    # Add spacing
+    doc.add_paragraph()
     
     # Parse and add report sections
     lines = report_text.split('\n')
@@ -204,10 +282,11 @@ def create_word_document(patient_info, report_text, report_date, include_hospita
     for line in lines:
         line_stripped = line.strip()
         if not line_stripped:
+            doc.add_paragraph()  # Preserve paragraph breaks
             continue
             
-        # Check if line is a heading (ends with colon and is uppercase)
-        if line_stripped.endswith(':') and line_stripped[:-1].isupper():
+        # Check if line is a heading (ends with colon and is mostly uppercase)
+        if line_stripped.endswith(':') and line_stripped[:-1].replace(' ', '').isupper():
             current_heading = line_stripped[:-1]  # Remove colon
             doc.add_heading(current_heading, level=1)
         elif line_stripped.startswith('**') and line_stripped.endswith('**'):
@@ -216,16 +295,27 @@ def create_word_document(patient_info, report_text, report_date, include_hospita
             p = doc.add_paragraph()
             run = p.add_run(bold_text)
             run.bold = True
+        elif line_stripped.startswith('- ') or line_stripped.startswith('* '):
+            # List item
+            p = doc.add_paragraph(style='List Bullet')
+            p.add_run(line_stripped[2:])
+        elif line_stripped[0].isdigit() and '. ' in line_stripped[:3]:
+            # Numbered list
+            p = doc.add_paragraph(style='List Number')
+            p.add_run(line_stripped.split('. ', 1)[1])
         else:
             # Regular content
             doc.add_paragraph(line_stripped)
     
     # Add footer with radiologist info
     doc.add_page_break()
-    doc.add_heading('RADIOLOGIST INFORMATION', level=1)
+    doc.add_heading('REPORT DETAILS', level=1)
     p = doc.add_paragraph()
-    p.add_run(f"Report generated by: {st.session_state.current_user}\n")
-    p.add_run(f"Date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    p.add_run(f"Generated by: {st.session_state.current_user}\n")
+    p.add_run(f"Generation date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+    
+    if technique_info:
+        p.add_run(f"Contrast: {technique_info.get('contrast', 'Not specified')}\n")
     
     return doc
 
@@ -243,7 +333,7 @@ def main():
         st.session_state.initialized = True
         st.session_state.config = {
             "current_user": "default",
-            "include_hospital_header": False  # Option to include hospital name
+            "include_hospital_header": True
         }
         st.session_state.users = {
             "admin": {"password": hashlib.sha256("admin123".encode()).hexdigest(), "role": "admin"},
@@ -259,11 +349,19 @@ def main():
         st.session_state.current_user = "default"
         st.session_state.logged_in = False
         st.session_state.differential_results = []
-        st.session_state.template_system = TemplateSystem()
+        st.session_state.template_system = EnhancedTemplateSystem()
         st.session_state.selected_template = ""
         st.session_state.new_template_name = ""
         st.session_state.new_template_content = ""
         st.session_state.new_template_type = "findings"
+        st.session_state.technique_info = {
+            "modality": "MRI",
+            "contrast": "Without contrast",
+            "sequences": "Standard sequences"
+        }
+        st.session_state.uploaded_template_name = ""
+        st.session_state.uploaded_template_type = "findings"
+        st.session_state.show_differential_suggestions = False
     
     # ===== LOGIN SYSTEM =====
     if not st.session_state.logged_in:
@@ -302,7 +400,7 @@ def main():
     # Header
     col1, col2, col3 = st.columns([3, 1, 1])
     with col1:
-        st.title("Radiology Reporting Assistant")
+        st.title("🏥 Radiology Reporting Assistant")
     with col2:
         st.markdown(f"**User:** {st.session_state.current_user}")
     with col3:
@@ -318,8 +416,8 @@ def main():
         # Settings
         with st.expander("⚙️ Settings"):
             st.session_state.config["include_hospital_header"] = st.checkbox(
-                "Include Hospital Header in Report", 
-                value=st.session_state.config.get("include_hospital_header", False)
+                "Include Hospital Header", 
+                value=st.session_state.config.get("include_hospital_header", True)
             )
         
         # Patient Information
@@ -346,35 +444,71 @@ def main():
                 else:
                     st.warning("Please enter at least Name and ID")
         
+        # ===== TECHNIQUE INFORMATION =====
+        st.divider()
+        st.header("🔬 Technique Details")
+        
+        with st.form("technique_form"):
+            modality = st.selectbox(
+                "Modality",
+                ["MRI", "CT", "Ultrasound", "X-ray", "PET-CT", "Mammography"],
+                index=0
+            )
+            
+            contrast = st.selectbox(
+                "Contrast Administration",
+                ["Without contrast", "With contrast", "With and without contrast", "Not specified"],
+                index=0
+            )
+            
+            sequences = st.text_area(
+                "Sequences/Protocol",
+                value=st.session_state.technique_info.get('sequences', ''),
+                placeholder="e.g., T1, T2, FLAIR, DWI, ADC"
+            )
+            
+            if st.form_submit_button("💾 Save Technique"):
+                st.session_state.technique_info = {
+                    "modality": modality,
+                    "contrast": contrast,
+                    "sequences": sequences if sequences else "Standard sequences"
+                }
+                st.success("Technique details saved!")
+        
         # ===== TEMPLATE MANAGEMENT =====
         st.divider()
         st.header("📚 Template Management")
         
-        # Add New Template
-        with st.expander("➕ Add New Template", expanded=False):
+        # Tab interface for templates
+        tab1, tab2 = st.tabs(["➕ Add Template", "📤 Upload Template"])
+        
+        with tab1:
             st.subheader("Create New Template")
             
             st.session_state.new_template_name = st.text_input(
                 "Template Name*", 
                 value=st.session_state.new_template_name,
-                placeholder="e.g., Normal Brain MRI Findings"
+                placeholder="e.g., Normal Brain MRI Findings",
+                key="new_template_name"
             )
             
             st.session_state.new_template_type = st.selectbox(
                 "Template Type",
-                ["findings", "technique", "impression", "clinical", "differential"],
+                ["findings", "technique", "impression", "clinical", "differential", "comparison"],
                 format_func=lambda x: x.upper(),
-                index=0
+                index=0,
+                key="new_template_type"
             )
             
             st.session_state.new_template_content = st.text_area(
                 "Template Content*",
                 value=st.session_state.new_template_content,
                 height=150,
-                placeholder="Enter the template text here..."
+                placeholder="Enter the template text here...",
+                key="new_template_content"
             )
             
-            if st.button("💾 Save Template", type="primary", use_container_width=True):
+            if st.button("💾 Save Template", type="primary", use_container_width=True, key="save_template"):
                 if st.session_state.new_template_name and st.session_state.new_template_content:
                     st.session_state.template_system.add_template(
                         st.session_state.new_template_name,
@@ -388,9 +522,47 @@ def main():
                 else:
                     st.warning("Please fill in both name and content")
         
-        # Select Template to Use
+        with tab2:
+            st.subheader("Upload Word Template")
+            
+            uploaded_file = st.file_uploader(
+                "Choose a Word document (.docx)",
+                type=['docx'],
+                key="template_upload"
+            )
+            
+            st.session_state.uploaded_template_name = st.text_input(
+                "Template Name*",
+                value=st.session_state.uploaded_template_name,
+                placeholder="e.g., Hospital MRI Protocol",
+                key="uploaded_name"
+            )
+            
+            st.session_state.uploaded_template_type = st.selectbox(
+                "Template Type",
+                ["findings", "technique", "impression", "clinical", "differential", "comparison"],
+                format_func=lambda x: x.upper(),
+                index=0,
+                key="uploaded_type"
+            )
+            
+            if uploaded_file and st.session_state.uploaded_template_name:
+                if st.button("📤 Upload Template", type="primary", use_container_width=True, key="upload_template"):
+                    success, result = st.session_state.template_system.upload_word_template(
+                        uploaded_file,
+                        st.session_state.uploaded_template_name,
+                        st.session_state.uploaded_template_type
+                    )
+                    if success:
+                        st.success(f"Template '{st.session_state.uploaded_template_name}' uploaded successfully!")
+                        st.session_state.uploaded_template_name = ""
+                        st.rerun()
+                    else:
+                        st.error(f"Upload failed: {result}")
+        
+        # ===== SELECT TEMPLATE =====
         st.divider()
-        st.subheader("📋 Select Template")
+        st.subheader("📋 Available Templates")
         
         # Get user's templates
         user_templates = st.session_state.template_system.get_user_templates(st.session_state.current_user)
@@ -398,44 +570,36 @@ def main():
         if user_templates:
             template_names = list(user_templates.keys())
             
-            # Create dropdown with template info
-            template_options = []
+            # Group templates by type
+            templates_by_type = defaultdict(list)
             for name in template_names:
-                template_data = user_templates[name]
-                usage = template_data.get("used_count", 0)
-                template_options.append(f"{name} ({usage} uses)")
-            
-            selected_template_display = st.selectbox(
-                "Your Templates:",
-                ["Select a template..."] + template_options,
-                key="template_select_display"
-            )
-            
-            if selected_template_display != "Select a template...":
-                # Extract template name from display string
-                selected_template_name = selected_template_display.split(" (")[0]
-                st.session_state.selected_template = selected_template_name
+                if name in st.session_state.template_system.templates:
+                    template_data = st.session_state.template_system.templates[name]
+                else:
+                    template_data = st.session_state.template_system.uploaded_templates[name]
                 
-                # Show template preview
-                with st.expander("👁️ Preview Template"):
-                    template_data = user_templates[selected_template_name]
-                    st.caption(f"Type: {template_data['type'].upper()}")
-                    st.caption(f"Created: {template_data.get('created_date', 'Unknown')}")
-                    st.text(template_data['content'][:200] + "..." if len(template_data['content']) > 200 else template_data['content'])
-                
-                # Apply Template Button
-                if st.button("📥 Insert Template", type="secondary", use_container_width=True):
-                    if st.session_state.selected_template:
-                        st.session_state.report_draft = st.session_state.template_system.apply_template(
-                            st.session_state.selected_template,
-                            st.session_state.report_draft
-                        )
-                        st.success(f"Template inserted with '{st.session_state.template_system.get_template_heading(st.session_state.selected_template)}' heading!")
-                        st.rerun()
+                template_type = template_data.get('type', 'findings')
+                templates_by_type[template_type.upper()].append(name)
+            
+            # Display templates by type
+            for template_type, names in templates_by_type.items():
+                with st.expander(f"{template_type} Templates ({len(names)})", expanded=False):
+                    for name in sorted(names):
+                        col_temp1, col_temp2 = st.columns([3, 1])
+                        with col_temp1:
+                            st.write(f"**{name}**")
+                        with col_temp2:
+                            if st.button("📥", key=f"insert_{name}", help=f"Insert {name}"):
+                                st.session_state.report_draft = st.session_state.template_system.apply_template(
+                                    name,
+                                    st.session_state.report_draft
+                                )
+                                st.success(f"Template '{name}' inserted!")
+                                st.rerun()
         else:
-            st.info("No templates yet. Create your first template above!")
+            st.info("No templates yet. Create or upload your first template!")
         
-        # Quick Templates (System templates)
+        # Quick Templates
         st.divider()
         st.subheader("⚡ Quick Templates")
         
@@ -462,90 +626,105 @@ def main():
         # Draft Area
         st.header("✍️ Report Draft")
         
-        # Show active template
-        if st.session_state.selected_template:
-            template_heading = st.session_state.template_system.get_template_heading(st.session_state.selected_template)
-            st.info(f"📋 Active Template: **{st.session_state.selected_template}** (Will insert as: **{template_heading}** heading)")
+        # Show technique info
+        if st.session_state.technique_info.get('contrast'):
+            contrast_status = st.session_state.technique_info['contrast']
+            st.info(f"**Technique:** {st.session_state.technique_info['modality']} | **Contrast:** {contrast_status}")
         
-        # Differential Diagnosis Suggestions (Separate Section)
+        # Differential Diagnosis Suggestions Button
         if st.session_state.report_draft:
-            st.session_state.differential_results = generate_differential_diagnosis(st.session_state.report_draft)
+            col_diff1, col_diff2 = st.columns([2, 1])
+            with col_diff1:
+                if st.button("🧠 Generate Differential Suggestions", type="secondary", use_container_width=True):
+                    st.session_state.show_differential_suggestions = True
+                    st.session_state.differential_results = generate_differential_diagnosis(st.session_state.report_draft)
+                    st.rerun()
             
-            if st.session_state.differential_results:
-                st.subheader("🧠 Differential Diagnosis Suggestions")
-                st.caption("Review and manually add to report if desired:")
+            # Show Differential Suggestions if requested
+            if st.session_state.show_differential_suggestions and st.session_state.differential_results:
+                st.subheader("Differential Diagnosis Suggestions")
+                st.caption("Select suggestions to add to your draft (they will NOT be automatically added):")
                 
                 for i, dx in enumerate(st.session_state.differential_results):
-                    with st.expander(f"🔍 {dx['diagnosis']} ({dx['confidence']} confidence)", expanded=False):
-                        col_dx1, col_dx2 = st.columns([3, 1])
-                        with col_dx1:
-                            st.write(f"**Key Features:** {dx['features']}")
-                        with col_dx2:
-                            # Button to add to report
-                            if st.button("➕ Add", key=f"add_dx_{i}", use_container_width=True):
-                                if "DIFFERENTIAL DIAGNOSIS:" not in st.session_state.report_draft:
-                                    dx_text = f"\n\nDIFFERENTIAL DIAGNOSIS:\n1. {dx['diagnosis']}: {dx['features']}"
-                                else:
-                                    # Find the last line number and add new one
-                                    lines = st.session_state.report_draft.split('\n')
-                                    last_number = 1
-                                    for line in reversed(lines):
-                                        if line.strip().startswith(tuple(str(i) for i in range(10))):
-                                            try:
-                                                last_number = int(line.split('.')[0]) + 1
-                                                break
-                                            except:
-                                                pass
-                                    dx_text = f"\n{last_number}. {dx['diagnosis']}: {dx['features']}"
-                                
-                                st.session_state.report_draft += dx_text
-                                st.success(f"Added {dx['diagnosis']} to report!")
-                                st.rerun()
+                    col_dx1, col_dx2, col_dx3 = st.columns([3, 1, 1])
+                    with col_dx1:
+                        st.write(f"**{dx['diagnosis']}** ({dx['confidence']} confidence)")
+                        st.caption(f"Features: {dx['features']}")
+                    
+                    with col_dx2:
+                        if st.button("➕ Add", key=f"add_dx_{i}", use_container_width=True):
+                            if "DIFFERENTIAL DIAGNOSIS:" not in st.session_state.report_draft:
+                                dx_text = f"\n\nDIFFERENTIAL DIAGNOSIS:\n1. {dx['diagnosis']}: {dx['features']}"
+                            else:
+                                # Find the last line number and add new one
+                                lines = st.session_state.report_draft.split('\n')
+                                last_number = 1
+                                for line in reversed(lines):
+                                    if line.strip().startswith(tuple(str(i) for i in range(10))):
+                                        try:
+                                            last_number = int(line.split('.')[0]) + 1
+                                            break
+                                        except:
+                                            pass
+                                dx_text = f"\n{last_number}. {dx['diagnosis']}: {dx['features']}"
+                            
+                            st.session_state.report_draft += dx_text
+                            st.success(f"Added {dx['diagnosis']} to draft!")
+                            st.rerun()
+                    
+                    with col_dx3:
+                        if st.button("❌", key=f"hide_dx_{i}", help="Hide this suggestion", use_container_width=True):
+                            st.session_state.differential_results.pop(i)
+                            st.rerun()
         
         # Draft text area
         draft_text = st.text_area(
-            "Type your report below (templates will insert with proper headings):",
+            "Type your report below:",
             value=st.session_state.report_draft,
-            height=350,
+            height=300,
             key="draft_input",
             label_visibility="collapsed",
-            placeholder="Start typing your report here...\nOr insert templates from the sidebar.\nHeadings will be automatically formatted."
+            placeholder="Start typing your report here...\nUse templates from the sidebar.\nHeadings will be automatically formatted."
         )
         st.session_state.report_draft = draft_text
         
         # Action buttons
-        col1a, col1b, col1c = st.columns(3)
-        with col1a:
+        col_btn1, col_btn2, col_btn3 = st.columns(3)
+        with col_btn1:
             if st.button("🤖 Generate Full Report", type="primary", use_container_width=True):
                 if st.session_state.patient_info.get('name') and st.session_state.patient_info.get('id'):
                     # Format the draft with proper structure
                     formatted_report = ""
                     
-                    # Add clinical history if available
-                    if st.session_state.patient_info.get('history'):
-                        formatted_report += f"CLINICAL HISTORY:\n{st.session_state.patient_info['history']}\n"
+                    # Add patient info section
+                    formatted_report += "PATIENT INFORMATION:\n"
+                    formatted_report += f"Name: {st.session_state.patient_info.get('name', 'N/A')}\n"
+                    formatted_report += f"ID: {st.session_state.patient_info.get('id', 'N/A')}\n"
+                    formatted_report += f"Age/Sex: {st.session_state.patient_info.get('age', 'N/A')}/{st.session_state.patient_info.get('sex', 'N/A')}\n"
+                    formatted_report += f"Clinical History: {st.session_state.patient_info.get('history', 'N/A')}\n"
                     
-                    # Add technique section (default if not present)
-                    if "TECHNIQUE:" not in draft_text and "TECHNIQUE" not in draft_text:
-                        formatted_report += "\nTECHNIQUE:\nStandard imaging protocol was performed.\n"
+                    # Add technique section
+                    formatted_report += "\nTECHNIQUE:\n"
+                    tech_info = st.session_state.technique_info
+                    formatted_report += f"Modality: {tech_info.get('modality', 'Not specified')}\n"
+                    formatted_report += f"Contrast: {tech_info.get('contrast', 'Without contrast')}\n"
+                    formatted_report += f"Protocol: {tech_info.get('sequences', 'Standard sequences')}\n"
                     
                     # Add the main draft content
                     if draft_text:
-                        if formatted_report:  # Add spacing if we already have content
-                            formatted_report += "\n"
-                        formatted_report += draft_text
+                        formatted_report += "\n" + draft_text
                     
-                    # Ensure IMPRESSION section exists
+                    # Ensure IMPRESSION section exists if not in draft
                     if "IMPRESSION:" not in formatted_report and "IMPRESSION" not in formatted_report:
                         formatted_report += "\n\nIMPRESSION:\nFindings as described above. Clinical correlation recommended."
                     
                     st.session_state.ai_report = formatted_report
                     st.session_state.report_date = datetime.datetime.now().strftime("%Y-%m-%d")
-                    st.success("Report generated with proper headings!")
+                    st.success("Report generated with patient data!")
                 else:
                     st.warning("Please enter patient information first!")
         
-        with col1b:
+        with col_btn2:
             if st.button("🔍 Check Headings", use_container_width=True):
                 headings = re.findall(r'([A-Z][A-Z\s]+):', st.session_state.report_draft)
                 if headings:
@@ -553,10 +732,11 @@ def main():
                 else:
                     st.warning("No headings found. Use templates to add proper headings.")
         
-        with col1c:
+        with col_btn3:
             if st.button("🧹 Clear Draft", use_container_width=True):
                 st.session_state.report_draft = ""
                 st.session_state.selected_template = ""
+                st.session_state.show_differential_suggestions = False
                 st.rerun()
     
     with col2:
@@ -564,22 +744,11 @@ def main():
         st.header("📋 Final Report Preview")
         
         if st.session_state.ai_report:
-            # Display patient info
-            with st.container(border=True):
-                st.subheader("Patient Information")
-                col_info1, col_info2 = st.columns(2)
-                with col_info1:
-                    st.text(f"Name: {st.session_state.patient_info.get('name', 'N/A')}")
-                    st.text(f"Age/Sex: {st.session_state.patient_info.get('age', 'N/A')}/{st.session_state.patient_info.get('sex', 'N/A')}")
-                with col_info2:
-                    st.text(f"ID: {st.session_state.patient_info.get('id', 'N/A')}")
-                    st.text(f"Date: {st.session_state.report_date}")
-            
-            # Display formatted report
+            # Display preview
             st.text_area(
                 "Report Content:",
                 value=st.session_state.ai_report,
-                height=300,
+                height=400,
                 key="report_preview",
                 label_visibility="collapsed"
             )
@@ -590,7 +759,7 @@ def main():
                     patient_info=st.session_state.patient_info,
                     report_text=st.session_state.ai_report,
                     report_date=st.session_state.report_date,
-                    include_hospital_header=st.session_state.config.get("include_hospital_header", False)
+                    technique_info=st.session_state.technique_info
                 )
                 
                 # Save to buffer
@@ -620,14 +789,16 @@ def main():
             
             report_name = st.text_input(
                 "Report Name:",
-                value=f"{st.session_state.patient_info.get('name', 'Report')}_{st.session_state.report_date}"
+                value=f"{st.session_state.patient_info.get('name', 'Report')}_{st.session_state.report_date}",
+                key="save_report_name"
             )
             
-            if st.button("💾 Save to History", use_container_width=True):
+            if st.button("💾 Save to History", use_container_width=True, key="save_to_history"):
                 history_entry = {
                     "name": report_name,
                     "date": st.session_state.report_date,
                     "patient_info": st.session_state.patient_info,
+                    "technique_info": st.session_state.technique_info,
                     "report": st.session_state.ai_report,
                     "created_by": st.session_state.current_user,
                     "templates_used": st.session_state.selected_template if st.session_state.selected_template else "None"
@@ -641,18 +812,17 @@ def main():
                 **How to use this system:**
                 
                 1. **Enter Patient Info** in sidebar
-                2. **Add Templates** from sidebar dropdown
-                   - Templates automatically insert with proper headings
-                3. **Type additional findings**
-                4. **Review Differential Suggestions** (appear automatically)
+                2. **Set Technique Details** (contrast, modality)
+                3. **Add Templates** from sidebar
+                   - Create new templates
+                   - Upload Word document templates
+                4. **Type additional findings**
+                5. **Generate Differential Suggestions** (optional)
                    - Manually add relevant ones to report
-                5. **Click 'Generate Full Report'**
-                6. **Download as Word Document**
+                6. **Click 'Generate Full Report'**
+                7. **Download as Word Document**
                 
-                **Key Features:**
-                - Template headings appear below patient info
-                - Differential suggestions are optional
-                - Clean, professional formatting
+                **Patient data is always included in the report.**
                 """)
     
     # ===== REPORT HISTORY =====
@@ -669,6 +839,8 @@ def main():
                         st.session_state.patient_info = report['patient_info']
                         st.session_state.ai_report = report['report']
                         st.session_state.report_date = report['date']
+                        if 'technique_info' in report:
+                            st.session_state.technique_info = report['technique_info']
                         st.success("Report loaded for viewing!")
                         st.rerun()
                 
@@ -676,21 +848,3 @@ def main():
                     if st.button(f"🗑️ Delete", key=f"delete_{i}", use_container_width=True):
                         # Find the actual index (since we reversed for display)
                         actual_index = len(st.session_state.report_history) - 1 - i
-                        st.session_state.report_history.pop(actual_index)
-                        st.warning("Report deleted from history!")
-                        st.rerun()
-                
-                st.caption(f"**Patient:** {report['patient_info'].get('name', 'Unknown')} | **ID:** {report['patient_info'].get('id', 'Unknown')}")
-                st.caption(f"**Templates used:** {report.get('templates_used', 'None')}")
-                
-                # Show first few lines of report
-                preview = report['report'][:300]
-                if len(report['report']) > 300:
-                    preview += "..."
-                st.text(preview)
-    else:
-        st.info("No reports in history yet. Generate and save your first report!")
-
-# ===== RUN APPLICATION =====
-if __name__ == "__main__":
-    main()
