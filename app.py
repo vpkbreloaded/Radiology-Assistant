@@ -452,22 +452,34 @@ def create_branded_word_report(ai_report, patient_info, report_date, config, is_
     ]
     
     for i, (field, value) in enumerate(data, 1):
-        row_cells = table.rows[i].cells
-        row_cells[0].text = field
-        row_cells[1].text = value
+           # Patient information table - SIMPLIFIED VERSION
+    doc.add_heading('PATIENT INFORMATION', level=1)
     
-    # Clinical History
-    if patient_info.get('history'):
-        doc.add_heading('CLINICAL HISTORY', level=1)
-        doc.add_paragraph(patient_info['history'])
+    # Create table with dynamic rows
+    table = doc.add_table(rows=1, cols=2)
+    table.style = 'Light Grid Accent 1'
     
-    doc.add_page_break()
+    # Add header row
+    hdr_row = table.rows[0]
+    hdr_row.cells[0].text = "FIELD"
+    hdr_row.cells[1].text = "INFORMATION"
+    hdr_row.cells[0].paragraphs[0].runs[0].bold = True
+    hdr_row.cells[1].paragraphs[0].runs[0].bold = True
     
-    # Report Content
-    doc.add_heading('REPORT', level=1)
+    # Add data rows dynamically
+    data = [
+        ("Patient Name", patient_info.get('name', 'Not Provided')),
+        ("Patient ID", patient_info.get('id', 'Not Provided')),
+        ("Date of Birth", patient_info.get('dob', 'Not Provided')),
+        ("Age / Sex", f"{patient_info.get('age', 'N/A')} / {patient_info.get('sex', 'N/A')}"),
+        ("Accession #", patient_info.get('accession', 'Not Provided')),
+        ("Study Date", report_date)
+    ]
     
-    # Parse and format AI report
-    if '**TECHNIQUE:**' in ai_report:
+    for field, value in data:
+        row = table.add_row()
+        row.cells[0].text = field
+        row.cells[1].text = value
         sections = ai_report.split('**')
         for section in sections:
             if section.endswith(':**'):
@@ -1165,3 +1177,4 @@ def main():
 # ===== RUN APPLICATION =====
 if __name__ == "__main__":
     main()
+
