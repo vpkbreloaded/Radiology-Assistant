@@ -353,56 +353,92 @@ if st.session_state.report_history:
 else:
     st.info("No reports in history yet. Save your first report above!")
 
-# ===== BOTTOM SECTION =====
-st.divider()
-st.subheader("💾 Recent Drafts")
-if st.session_state.report_draft:
-    st.caption("Your current draft is auto-saved. Copy it for later use:")
-    st.code(st.session_state.report_draft[:500] + "..." if len(st.session_state.report_draft) > 500 else st.session_state.report_draft, language="text")
-else:
-    st.caption("Start typing in the left column to see your draft appear here.")
-# After your existing text download button, add this:
+# In your right column, where you display st.session_state.ai_report
 if st.session_state.ai_report:
-    # ... your existing code to display the report ...
     
+    # ... (your code to display the AI report) ...
+    
+    # Create columns for the download buttons
     col1, col2 = st.columns(2)
+    
     with col1:
-        # Your existing text download button
+        # Text download button (keep this as is)
         st.download_button(
             label="📥 Download as Text",
             data=st.session_state.ai_report,
-            file_name=f"Report_{patient_id}.txt",
+            file_name=f"Report_{st.session_state.patient_info.get('id', 'Unknown')}.txt",
             mime="text/plain",
             use_container_width=True
         )
+    
     with col2:
-        # NEW: Word document download button
-        from docx import Document
-        from io import BytesIO
-        
-        # Create a new Word document
-        doc = Document()
-        doc.add_heading('Radiology Report', 0)
-        doc.add_paragraph(f"Patient: {patient.get('name', 'N/A')}")
-        doc.add_paragraph(f"ID: {patient.get('id', 'N/A')}")
-        doc.add_paragraph(f"Date: {st.session_state.get('report_date', 'N/A')}")
-        doc.add_paragraph("")  # Empty line
-        
-        # Add the main report content
-        doc.add_heading('Report', level=1)
-        # Simple formatting: split by double newlines for paragraphs
-        for part in st.session_state.ai_report.split('\n\n'):
-            doc.add_paragraph(part)
-        
-        # Save document to a BytesIO stream
-        doc_io = BytesIO()
-        doc.save(doc_io)
-        doc_io.seek(0)
-        
-        st.download_button(
-            label="📄 Download as Word",
-            data=doc_io,
-            file_name=f"Report_{patient_id}.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            use_container_width=True
-        )
+        # Word document download button - UPDATED CODE
+        try:
+            from docx import Document
+            from docx.shared import Inches, Pt
+            from io import BytesIO
+            
+            # Create a new Word document
+            doc = Document()
+            
+            # Add a title
+            title = doc.add_heading('RADIOLOGY REPORT', 0)
+            title.alignment = 1  # Center align
+            
+            # Add patient information section
+            patient = st.session_state.get('patient_info', {})
+            doc.add_paragraph(f"Patient: {patient.get('name', 'N/A')}")
+            doc.add_paragraph(f"Patient ID: {patient.get('id', 'N/A')}")
+            doc.add_paragraph(f"Age/Sex: {patient.get('age', 'N/A')}/{patient.get('sex', 'N/A')}")
+            doc.add_paragraph(f"Accession #: {patient.get('accession', 'N/A')}")
+            doc.add_paragraph(f"Report Date: {st.session_state.get('report_date', 'N/A')}")
+            
+            # Add a line break
+            doc.add_paragraph()
+            
+            # Add the report content with basic formatting
+            # Split the AI report into sections if it has them
+            report_content = st.session_state.ai_report
+            
+            # Try to detect common sections
+            if '**TECHNIQUE:**' in report_content:
+                # Format as sections with headings
+                sections = report_content.split('**')
+                for i, section in enumerate(sections):
+                    if section.endswith(':**'):
+                        # This is a section header
+                        doc.add_heading(section.replace(':**', '').strip(), level=1)
+                    elif section.strip() and i > 0:
+                        # This is section content
+                        doc.add_paragraph(section.strip())
+            else:
+                # Just add the whole report as paragraphs
+                for paragraph in report_content.split('\n\n'):
+                    if paragraph.strip():
+                        doc.add_paragraph(paragraph.strip())
+            
+            # Save the document to a bytes buffer
+            doc_buffer = BytesIO()
+            doc.save(doc_buffer)
+            doc_buffer.seek(0)  # Move to the beginning of the buffer
+            
+            # Download button
+            st.download_button(
+                label="📄 Download as Word",
+                data=doc_buffer,
+                file_name=f"RAD_Report_{st.session_state.patient_info.get('id', 'Unknown')}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                help="Download as Microsoft Word document",
+                use_container_width=True
+            )
+            
+        except Exception as e:
+            st.error(f"Could not create Word document: {e}")
+            # Fallback to text download
+            st.download_button(
+                label="📄 Download as Word (Error - Click for Text)",
+                data=st.session_state.ai_report,
+                file_name=f"Report_{st.session_state.patient_info.get('id', 'Unknown')}.txt",
+                mime="text/plain",
+                use_container_width=True
+            )
