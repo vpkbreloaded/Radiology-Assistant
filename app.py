@@ -8,6 +8,28 @@ import json
 import os
 import datetime
 import time
+import pydicom
+from pydicom.errors import InvalidDicomError
+
+def extract_dicom_info(uploaded_file):
+    """Extract patient and study info from a DICOM file."""
+    try:
+        dicom_data = pydicom.dcmread(uploaded_file, force=True)
+        info = {
+            "name": str(getattr(dicom_data, 'PatientName', '')),
+            "id": str(getattr(dicom_data, 'PatientID', '')),
+            "dob": str(getattr(dicom_data, 'PatientBirthDate', '')),
+            "sex": str(getattr(dicom_data, 'PatientSex', '')),
+            "study_date": str(getattr(dicom_data, 'StudyDate', '')),
+            "modality": str(getattr(dicom_data, 'Modality', '')),
+            "study_desc": str(getattr(dicom_data, 'StudyDescription', ''))
+        }
+        return info
+    except InvalidDicomError:
+        return None
+    except Exception as e:
+        st.error(f"DICOM read error: {e}")
+        return None
 
 # ===== FUNCTIONS FOR PERMANENT STORAGE =====
 HISTORY_FILE = "report_history.json"
@@ -659,3 +681,4 @@ if st.session_state.report_draft:
         st.caption(f"Last auto-save: {last_save_str}")
 else:
     st.caption("Start typing in the left column. Your draft will auto-save every 30 seconds.")
+
