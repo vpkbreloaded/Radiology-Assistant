@@ -355,90 +355,67 @@ else:
 
 # In your right column, where you display st.session_state.ai_report
 if st.session_state.ai_report:
+    st.subheader("AI-Generated Report")
+    st.text_area(
+        "",
+        value=st.session_state.ai_report,
+        height=400,
+        key="ai_report_display",
+        label_visibility="collapsed"
+    )
     
-    # ... (your code to display the AI report) ...
-    
-    # Create columns for the download buttons
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        # Text download button (keep this as is)
+    # === SINGLE "DOWNLOAD AS WORD" BUTTON ===
+    try:
+        from docx import Document
+        from io import BytesIO
+        
+        # Create a new Word document
+        doc = Document()
+        
+        # Add title and patient info
+        doc.add_heading('RADIOLOGY REPORT', 0)
+        
+        patient = st.session_state.get('patient_info', {})
+        if patient:
+            doc.add_paragraph(f"Patient: {patient.get('name', 'N/A')}")
+            doc.add_paragraph(f"Patient ID: {patient.get('id', 'N/A')}")
+            doc.add_paragraph(f"Age/Sex: {patient.get('age', 'N/A')}/{patient.get('sex', 'N/A')}")
+            if patient.get('accession'):
+                doc.add_paragraph(f"Accession #: {patient.get('accession')}")
+        
+        doc.add_paragraph(f"Report Date: {st.session_state.get('report_date', 'N/A')}")
+        doc.add_paragraph()  # Empty line
+        
+        # Add the AI report content
+        # Split into paragraphs for better formatting
+        report_lines = st.session_state.ai_report.split('\n')
+        for line in report_lines:
+            if line.strip():  # Only add non-empty lines
+                doc.add_paragraph(line.strip())
+        
+        # Save document to a BytesIO buffer
+        doc_buffer = BytesIO()
+        doc.save(doc_buffer)
+        doc_buffer.seek(0)  # Move to start of buffer
+        
+        # Single download button for Word document
         st.download_button(
-            label="📥 Download as Text",
+            label="📄 Download Report as Word",
+            data=doc_buffer,
+            file_name=f"Rad_Report_{st.session_state.patient_info.get('id', 'Unknown')}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            help="Download as Microsoft Word document (.docx)",
+            use_container_width=True,
+            type="primary"  # Makes it stand out as the main action
+        )
+        
+    except Exception as e:
+        # Fallback to text download if Word creation fails
+        st.error(f"Word creation failed: {str(e)[:50]}...")
+        st.download_button(
+            label="📥 Download Report as Text (Fallback)",
             data=st.session_state.ai_report,
             file_name=f"Report_{st.session_state.patient_info.get('id', 'Unknown')}.txt",
             mime="text/plain",
             use_container_width=True
         )
-    
-    with col2:
-        # Word document download button - UPDATED CODE
-        try:
-            from docx import Document
-            from docx.shared import Inches, Pt
-            from io import BytesIO
-            
-            # Create a new Word document
-            doc = Document()
-            
-            # Add a title
-            title = doc.add_heading('RADIOLOGY REPORT', 0)
-            title.alignment = 1  # Center align
-            
-            # Add patient information section
-            patient = st.session_state.get('patient_info', {})
-            doc.add_paragraph(f"Patient: {patient.get('name', 'N/A')}")
-            doc.add_paragraph(f"Patient ID: {patient.get('id', 'N/A')}")
-            doc.add_paragraph(f"Age/Sex: {patient.get('age', 'N/A')}/{patient.get('sex', 'N/A')}")
-            doc.add_paragraph(f"Accession #: {patient.get('accession', 'N/A')}")
-            doc.add_paragraph(f"Report Date: {st.session_state.get('report_date', 'N/A')}")
-            
-            # Add a line break
-            doc.add_paragraph()
-            
-            # Add the report content with basic formatting
-            # Split the AI report into sections if it has them
-            report_content = st.session_state.ai_report
-            
-            # Try to detect common sections
-            if '**TECHNIQUE:**' in report_content:
-                # Format as sections with headings
-                sections = report_content.split('**')
-                for i, section in enumerate(sections):
-                    if section.endswith(':**'):
-                        # This is a section header
-                        doc.add_heading(section.replace(':**', '').strip(), level=1)
-                    elif section.strip() and i > 0:
-                        # This is section content
-                        doc.add_paragraph(section.strip())
-            else:
-                # Just add the whole report as paragraphs
-                for paragraph in report_content.split('\n\n'):
-                    if paragraph.strip():
-                        doc.add_paragraph(paragraph.strip())
-            
-            # Save the document to a bytes buffer
-            doc_buffer = BytesIO()
-            doc.save(doc_buffer)
-            doc_buffer.seek(0)  # Move to the beginning of the buffer
-            
-            # Download button
-            st.download_button(
-                label="📄 Download as Word",
-                data=doc_buffer,
-                file_name=f"RAD_Report_{st.session_state.patient_info.get('id', 'Unknown')}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                help="Download as Microsoft Word document",
-                use_container_width=True
-            )
-            
-        except Exception as e:
-            st.error(f"Could not create Word document: {e}")
-            # Fallback to text download
-            st.download_button(
-                label="📄 Download as Word (Error - Click for Text)",
-                data=st.session_state.ai_report,
-                file_name=f"Report_{st.session_state.patient_info.get('id', 'Unknown')}.txt",
-                mime="text/plain",
-                use_container_width=True
-            )
