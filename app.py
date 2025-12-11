@@ -8,30 +8,17 @@ import json
 import os
 import datetime
 import time
-import pydicom
-from pydicom.errors import InvalidDicomError
 
-def extract_dicom_info(uploaded_file):
-    """Extract patient and study info from a DICOM file."""
-    try:
-        dicom_data = pydicom.dcmread(uploaded_file, force=True)
-        info = {
-            "name": str(getattr(dicom_data, 'PatientName', '')),
-            "id": str(getattr(dicom_data, 'PatientID', '')),
-            "dob": str(getattr(dicom_data, 'PatientBirthDate', '')),
-            "sex": str(getattr(dicom_data, 'PatientSex', '')),
-            "study_date": str(getattr(dicom_data, 'StudyDate', '')),
-            "modality": str(getattr(dicom_data, 'Modality', '')),
-            "study_desc": str(getattr(dicom_data, 'StudyDescription', ''))
-        }
-        return info
-    except InvalidDicomError:
-        return None
-    except Exception as e:
-        st.error(f"DICOM read error: {e}")
-        return None
+# ===== DICOM IMPORT =====
+try:
+    import pydicom
+    from pydicom.errors import InvalidDicomError
+    DICOM_AVAILABLE = True
+except ImportError:
+    DICOM_AVAILABLE = False
+    st.warning("⚠️ pydicom library not installed. DICOM features disabled.")
 
-# ===== FUNCTIONS FOR PERMANENT STORAGE =====
+# ===== FUNCTIONS =====
 HISTORY_FILE = "report_history.json"
 TEMPLATES_FILE = "saved_templates.json"
 
@@ -88,7 +75,6 @@ def load_templates_from_file():
         st.error(f"Error loading templates: {e}")
     return {}
 
-# ===== PROFESSIONAL WORD EXPORT FUNCTION =====
 def create_professional_word_report(ai_report, patient_info, report_date):
     """Create a professionally formatted Word document."""
     doc = Document()
@@ -143,51 +129,31 @@ def create_professional_word_report(ai_report, patient_info, report_date):
         doc.add_heading('CLINICAL HISTORY', level=1)
         doc.add_paragraph(patient_info.get('history'))
     
-    doc.add_paragraph()  # Spacing
+    doc.add_paragraph()
     
     # 5. REPORT CONTENT
     doc.add_heading('REPORT', level=1)
     
-    # Smart parsing of AI report sections
     if '**TECHNIQUE:**' in ai_report:
-        # Format with proper section headings
         sections_text = ai_report.split('**')
         for section in sections_text:
             if section.endswith(':**'):
-                # Section heading
                 doc.add_heading(section.replace(':**', '').strip(), level=2)
             elif section.strip():
-                # Section content
-                # Handle bullet points
                 lines = section.strip().split('\n')
                 for line in lines:
                     if line.strip().startswith('-') or line.strip().startswith('*'):
-                        # Bullet point
                         p = doc.add_paragraph(style='List Bullet')
                         p.add_run(line.strip().lstrip('-* '))
                     elif line.strip():
-                        # Regular paragraph
                         doc.add_paragraph(line.strip())
     else:
-        # Simple formatting
         lines = ai_report.split('\n')
         for line in lines:
             if line.strip():
                 doc.add_paragraph(line.strip())
     
-    # 6. IMPRESSION (if separate)
-    if '**IMPRESSION:**' in ai_report:
-        # Already handled in sections
-        pass
-    elif 'IMPRESSION:' in ai_report or 'Impression:' in ai_report:
-        doc.add_heading('IMPRESSION', level=2)
-        # Extract impression text
-        impression_start = ai_report.lower().find('impression')
-        if impression_start != -1:
-            impression_text = ai_report[impression_start + 10:].strip()
-            doc.add_paragraph(impression_text)
-    
-    # 7. FOOTER WITH TIMESTAMP
+    # 6. FOOTER
     footer = sections[0].footer
     footer_para = footer.paragraphs[0]
     footer_para.text = f"Report generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')} | AI Radiology Assistant v1.0"
@@ -195,7 +161,6 @@ def create_professional_word_report(ai_report, patient_info, report_date):
     footer_para.style.font.size = Pt(8)
     footer_para.style.font.color.rgb = RGBColor(150, 150, 150)
     
-    # 8. PAGE NUMBER
     footer.add_paragraph().alignment = WD_ALIGN_PARAGRAPH.RIGHT
     footer.paragraphs[1].text = "Page 1 of 1"
     
@@ -225,16 +190,9 @@ if 'last_saved_draft' not in st.session_state:
     st.session_state.last_saved_draft = ""
 if 'template_categories' not in st.session_state:
     st.session_state.template_categories = {
-        "Brain": [],
-        "Spine": [],
-        "Chest": [],
-        "Abdomen": [],
-        "MSK": [],
-        "Other": []
+        "Brain": [], "Spine": [], "Chest": [], "Abdomen": [], "MSK": [], "Other": []
     }
-    # Load existing templates into categories
     for name, content in st.session_state.saved_templates.items():
-        # Simple categorization (you can improve this)
         if any(word in name.lower() for word in ['brain', 'head', 'mri']):
             st.session_state.template_categories["Brain"].append(name)
         elif any(word in name.lower() for word in ['spine', 'vertebral']):
@@ -247,7 +205,7 @@ if 'template_categories' not in st.session_state:
 # ===== APP TITLE =====
 st.title('🏥 Professional Radiology Reporting Assistant')
 
-# ===== SIDEBAR: PATIENT INFO & TEMPLATE MANAGEMENT =====
+# ===== SIDEBAR =====
 with st.sidebar:
     st.header("🧾 Patient Information")
     
@@ -269,21 +227,85 @@ with st.sidebar:
             }
             st.success("Patient info saved!")
     
+    # ===== DICOM UPLOADER SECTION =====
+    st.divider()
+    st.header("🖼️ DICOM Import")
+    
+    if DICOM_AVAILABLE:
+        uploaded_dicom = st.file_uploader("Upload DICOM file (.dcm)", type=['dcm'])
+        
+        if uploaded_dicom is not None:
+            try:
+                dicom_data = pydicom.dcmread(uploaded_dicom, force=True)
+                
+                dicom_info = {
+                    "name": str(getattr(dicom_data, 'PatientName', '')).strip(),
+                    "id": str(getattr(dicom_data, 'PatientID', '')).strip(),
+                    "dob": str(getattr(dicom_data, 'PatientBirthDate', '')).strip(),
+                    "sex": str(getattr(dicom_data, 'PatientSex', '')).strip(),
+                    "study_date": str(getattr(dicom_data, 'StudyDate', '')).strip(),
+                    "modality": str(getattr(dicom_data, 'Modality', 'MRI')).strip(),
+                    "study_desc": str(getattr(dicom_data, 'StudyDescription', '')).strip()
+                }
+                
+                st.success("✅ DICOM metadata extracted!")
+                
+                with st.expander("📋 View extracted DICOM data"):
+                    st.write(f"**Patient Name:** {dicom_info['name']}")
+                    st.write(f"**Patient ID:** {dicom_info['id']}")
+                    st.write(f"**Date of Birth:** {dicom_info['dob']}")
+                    st.write(f"**Sex:** {dicom_info['sex']}")
+                    st.write(f"**Study Date:** {dicom_info['study_date']}")
+                    st.write(f"**Modality:** {dicom_info['modality']}")
+                    st.write(f"**Study Description:** {dicom_info['study_desc']}")
+                
+                if st.button("🚀 Auto-Fill Form with DICOM Data"):
+                    # Map DICOM sex to app format
+                    sex_map = {"M": "M", "F": "F", "O": "Other"}
+                    app_sex = sex_map.get(dicom_info['sex'], "")
+                    
+                    # Calculate age from DOB if available
+                    age_from_dob = ""
+                    if dicom_info['dob'] and len(dicom_info['dob']) >= 8:
+                        try:
+                            birth_year = int(dicom_info['dob'][:4])
+                            current_year = datetime.datetime.now().year
+                            age_from_dob = str(current_year - birth_year)
+                        except:
+                            age_from_dob = ""
+                    
+                    st.session_state.patient_info = {
+                        "name": dicom_info['name'],
+                        "id": dicom_info['id'],
+                        "age": age_from_dob if age_from_dob else p_age,
+                        "sex": app_sex,
+                        "accession": f"DICOM-{dicom_info['study_date']}" if dicom_info['study_date'] else p_accession,
+                        "history": f"{dicom_info['modality']}: {dicom_info['study_desc']}" if dicom_info['study_desc'] else p_history
+                    }
+                    st.success("Patient info loaded from DICOM!")
+                    st.rerun()
+                    
+            except InvalidDicomError:
+                st.error("❌ The uploaded file is not a valid DICOM file.")
+            except Exception as e:
+                st.error(f"❌ Error reading DICOM: {str(e)[:100]}")
+    else:
+        st.info("ℹ️ DICOM features require 'pydicom' library.")
+        if st.button("📋 Show Installation Command"):
+            st.code("py -m pip install pydicom")
+    
     st.divider()
     
-    # ===== TEMPLATE LIBRARY WITH CATEGORIES =====
+    # ===== TEMPLATE LIBRARY =====
     st.header("📚 Template Library")
     
-    # Category selection
     selected_category = st.selectbox(
         "Browse by category:",
         options=["All"] + list(st.session_state.template_categories.keys()),
         key="category_selector"
     )
     
-    # Save Current Draft as a New Template WITH CATEGORY
     st.subheader("💾 Save Current Draft")
-    
     col1, col2 = st.columns(2)
     with col1:
         new_template_name = st.text_input("Template name:")
@@ -296,29 +318,22 @@ with st.sidebar:
     
     if st.button("💾 Save as New Template", key="save_button"):
         if not new_template_name:
-            st.warning("Please enter a name for the template.")
+            st.warning("Please enter a name.")
         elif not st.session_state.report_draft:
-            st.warning("Your draft is empty. Type something in the left column first.")
+            st.warning("Your draft is empty.")
         else:
-            # Save template content
             st.session_state.saved_templates[new_template_name] = st.session_state.report_draft
-            
-            # Add to category
             if new_template_name not in st.session_state.template_categories[template_category]:
                 st.session_state.template_categories[template_category].append(new_template_name)
-            
-            # Save to file
             if save_templates_to_file():
-                st.success(f"Template **'{new_template_name}'** saved to **{template_category}** category!")
+                st.success(f"Template **'{new_template_name}'** saved!")
             else:
-                st.error("Template saved to session but failed to save to file.")
+                st.error("Failed to save to file.")
     
     st.divider()
     
-    # ===== LOAD TEMPLATES BY CATEGORY =====
     st.subheader("📂 Load Saved Template")
     
-    # Get templates based on selected category
     if selected_category == "All":
         available_templates = list(st.session_state.saved_templates.keys())
     else:
@@ -341,53 +356,43 @@ with st.sidebar:
         with col2:
             if st.button("🗑️ Delete", key="delete_button"):
                 if selected_template_name in st.session_state.saved_templates:
-                    # Remove from templates
                     del st.session_state.saved_templates[selected_template_name]
-                    
-                    # Remove from all categories
                     for category in st.session_state.template_categories:
                         if selected_template_name in st.session_state.template_categories[category]:
                             st.session_state.template_categories[category].remove(selected_template_name)
-                    
-                    # Save to file
                     save_templates_to_file()
                     st.warning(f"Deleted template **'{selected_template_name}'**.")
                     st.rerun()
         
-        # Preview
         if selected_template_name in st.session_state.saved_templates:
             with st.expander("🔍 Preview"):
                 preview_text = st.session_state.saved_templates[selected_template_name]
                 st.caption(preview_text[:150] + "..." if len(preview_text) > 150 else preview_text)
     else:
-        st.info(f"No templates in '{selected_category}' category yet.")
+        st.info(f"No templates in '{selected_category}' category.")
     
     st.divider()
     
     # ===== QUICK TEMPLATES =====
     st.header("⚡ Quick Insert")
-    
     quick_categories = {
         "Brain MRI": {
-            "Normal Brain MRI": "Normal study. No acute intracranial hemorrhage, mass effect, or territorial infarct. Ventricles and sulci are normal. No abnormal enhancement.",
-            "White Matter Changes": "Scattered punctate FLAIR hyperintensities in the periventricular and deep white matter, consistent with chronic microvascular ischemia.",
-            "Meningioma": "Extra-axial dural-based mass with homogeneous enhancement and dural tail sign. Mild vasogenic edema in the adjacent parenchyma.",
-            "Acute Stroke": "Restricted diffusion in the [TERRITORY] territory consistent with acute infarct. No hemorrhage on GRE."
+            "Normal Brain MRI": "Normal study. No acute intracranial hemorrhage, mass effect, or territorial infarct.",
+            "White Matter Changes": "Scattered FLAIR hyperintensities consistent with chronic microvascular ischemia.",
+            "Meningioma": "Extra-axial dural-based mass with homogeneous enhancement and dural tail sign."
         },
         "Spine MRI": {
-            "Disc Herniation": "Disc bulge/protrusion at [LEVEL] causing mild [SIDE] neural foraminal narrowing.",
+            "Disc Herniation": "Disc bulge/protrusion at [LEVEL] causing mild neural foraminal narrowing.",
             "Spinal Stenosis": "Degenerative changes with moderate central canal stenosis at [LEVEL]."
         }
     }
     
     selected_quick_category = st.selectbox("Category:", list(quick_categories.keys()))
-    
     if selected_quick_category:
         selected_quick_template = st.selectbox(
             "Template:",
             ["Select..."] + list(quick_categories[selected_quick_category].keys())
         )
-        
         if selected_quick_template != "Select...":
             if st.button(f"Insert '{selected_quick_template}'"):
                 current_draft = st.session_state.report_draft
@@ -397,31 +402,26 @@ with st.sidebar:
                 st.rerun()
     
     st.divider()
-    
-    # Clear All Button
-    if st.button("🧹 Clear All Text (Draft & AI Report)"):
+    if st.button("🧹 Clear All Text"):
         st.session_state.report_draft = ""
         st.session_state.ai_report = ""
         st.rerun()
 
-# ===== MAIN AREA: TWO-COLUMN EDITOR =====
+# ===== MAIN AREA =====
 col1, col2 = st.columns(2)
 
-# Column 1: Your Draft Area WITH AUTO-SAVE
 with col1:
     st.header("✍️ Your Draft / Findings")
-    
-    # Auto-save status indicator
     if 'last_save_time' in st.session_state:
         time_since_save = (datetime.datetime.now() - st.session_state.last_save_time).seconds
         if time_since_save < 60:
             st.caption(f"🔄 Auto-save: {time_since_save}s ago")
-        elif time_since_save < 300:  # 5 minutes
+        elif time_since_save < 300:
             st.caption("⚡ Draft saved")
         else:
             st.caption("⏳ Draft not saved recently")
     
-    st.caption("Type your raw observations, bullet points, or incomplete sentences here.")
+    st.caption("Type your observations, bullet points, or incomplete sentences here.")
     
     draft_text = st.text_area(
         "Draft your report below:",
@@ -429,29 +429,20 @@ with col1:
         height=450,
         key="draft_input",
         label_visibility="collapsed",
-        placeholder="Example findings:\n- 2.3 cm well-defined lesion in the right frontal lobe\n- Isointense on T1, enhances homogeneously\n- Minimal perilesional edema\n- Differential: Meningioma vs. Metastasis"
+        placeholder="Example findings:\n- 2.3 cm lesion in right frontal lobe\n- Isointense on T1, enhances homogeneously\n- Minimal perilesional edema\n- Differential: Meningioma vs. Metastasis"
     )
     
-    # ===== AUTO-SAVE LOGIC =====
     if draft_text != st.session_state.get('last_saved_draft', ''):
         st.session_state.report_draft = draft_text
-        
-        # Auto-save every 30 seconds if draft has changed
         current_time = datetime.datetime.now()
         last_save = st.session_state.get('last_save_time', current_time)
         
-        if (current_time - last_save).seconds > 30:  # Auto-save every 30 seconds
+        if (current_time - last_save).seconds > 30:
             st.session_state.last_saved_draft = draft_text
             st.session_state.last_save_time = current_time
-            
-            # Also auto-save to templates file periodically
-            if 'saved_templates' in st.session_state and st.session_state.saved_templates:
+            if st.session_state.saved_templates:
                 save_templates_to_file()
-            
-            # Show subtle success (you'll see it flash)
-            st.success("💾 Draft auto-saved", icon="✅")
 
-# Column 2: AI Assistant & Report
 with col2:
     st.header("🤖 AI Report Assistant")
     
@@ -462,7 +453,7 @@ with col2:
     
     if st.button("🤖 Generate Report with AI", type="primary", use_container_width=True):
         if not st.session_state.report_draft:
-            st.warning("Please enter some draft findings in the left column first.")
+            st.warning("Please enter draft findings first.")
         else:
             patient = st.session_state.get('patient_info', {})
             system_message = "You are an expert radiologist. Convert the following draft findings into a formal, structured radiology report."
@@ -484,19 +475,15 @@ with col2:
             """
 
             with st.spinner('AI is writing the report...'):
-                # ===== AI API CALL PLACEHOLDER =====
-                # TEMPORARY SIMULATION - Replace with real API when ready
                 ai_report = f"""**TECHNIQUE:** MRI brain without and with contrast.
 **FINDINGS:** {st.session_state.report_draft[:100]}... [Full AI-generated report would appear here after API integration].
 **IMPRESSION:** Findings consistent with the described observations. Clinical correlation recommended."""
                 
                 st.session_state.ai_report = ai_report
-                # Add date and timestamp for the history
                 st.session_state.report_date = datetime.datetime.now().strftime("%Y-%m-%d")
                 st.session_state.report_timestamp = datetime.datetime.now().isoformat()
                 st.success("Report generated!")
     
-    # ===== PROFESSIONAL WORD DOWNLOAD =====
     if st.session_state.ai_report:
         st.subheader("AI-Generated Report")
         st.text_area(
@@ -507,9 +494,7 @@ with col2:
             label_visibility="collapsed"
         )
         
-        # Single "Download as Professional Word" button
         try:
-            # Create professional Word document
             patient = st.session_state.get('patient_info', {})
             report_date = st.session_state.get('report_date', datetime.datetime.now().strftime('%Y-%m-%d'))
             
@@ -519,12 +504,10 @@ with col2:
                 report_date
             )
             
-            # Save to bytes buffer
             doc_buffer = BytesIO()
             doc.save(doc_buffer)
             doc_buffer.seek(0)
             
-            # Download button with professional label
             st.download_button(
                 label="📄 Download Professional Report",
                 data=doc_buffer,
@@ -535,12 +518,10 @@ with col2:
                 type="primary"
             )
             
-            # File info
-            file_size = len(doc_buffer.getvalue()) / 1024  # KB
+            file_size = len(doc_buffer.getvalue()) / 1024
             st.caption(f"📦 File size: {file_size:.1f} KB | 📅 Date: {report_date}")
             
         except Exception as e:
-            # Fallback to basic text if Word creation fails
             st.error(f"Professional Word creation failed: {str(e)[:100]}")
             st.download_button(
                 label="📥 Download as Basic Text",
@@ -559,11 +540,10 @@ with col2:
         4. Download as professional Word document
         """)
 
-# ===== REPORT HISTORY & EXPORT =====
+# ===== REPORT HISTORY =====
 st.divider()
 st.header("📜 Report History")
 
-# Save the current report to history
 st.subheader("💾 Save Current Report")
 report_to_save_name = st.text_input("Name for this report (e.g., PatientName_Date):")
 
@@ -573,7 +553,6 @@ if st.button("Save to History", key="save_history_button"):
     elif not st.session_state.report_draft and not st.session_state.ai_report:
         st.warning("No report content to save.")
     else:
-        # Create a history entry with timestamp
         history_entry = {
             "name": report_to_save_name,
             "date": st.session_state.get("report_date", datetime.datetime.now().strftime("%Y-%m-%d")),
@@ -582,28 +561,20 @@ if st.button("Save to History", key="save_history_button"):
             "draft": st.session_state.report_draft,
             "ai_report": st.session_state.ai_report
         }
-        # Add to the beginning of the history list
         st.session_state.report_history.insert(0, history_entry)
-        
-        # Save to file
         if save_history_to_file():
             st.success(f"Report '{report_to_save_name}' saved to history!")
         else:
-            st.error("Report saved to session but failed to save to file.")
+            st.error("Failed to save to file.")
 
 st.divider()
-
-# Browse and Load from History
 st.subheader("📂 Load Past Report")
 
 if st.session_state.report_history:
-    # Create a list of report names for the dropdown
     history_options = [f"{entry['name']} ({entry.get('date', 'No date')})" for entry in st.session_state.report_history]
-    
     selected_history = st.selectbox("Select a report:", options=history_options, key="history_selector")
     
     if selected_history:
-        # Find the index of the selected report
         selected_index = history_options.index(selected_history)
         selected_entry = st.session_state.report_history[selected_index]
         
@@ -626,10 +597,9 @@ if st.session_state.report_history:
                 if save_history_to_file():
                     st.warning("Report deleted from history.")
                 else:
-                    st.error("Deleted from session but file save failed.")
+                    st.error("Failed to save file.")
                 st.rerun()
         
-        # Show a preview
         with st.expander("🔍 Preview this report"):
             st.write(f"**Patient:** {selected_entry['patient_info'].get('name', 'N/A')}")
             st.caption(f"**Saved on:** {selected_entry.get('timestamp', 'Unknown date')}")
@@ -640,7 +610,6 @@ if st.session_state.report_history:
                 st.caption("**AI Report Preview:**")
                 st.text(selected_entry['ai_report'][:150] + "..." if len(selected_entry['ai_report']) > 150 else selected_entry['ai_report'])
 
-    # Add a button to clear ALL history
     st.divider()
     if st.button("🗑️ Clear ALL History", type="secondary", key="clear_all_history"):
         if os.path.exists(HISTORY_FILE):
@@ -648,7 +617,6 @@ if st.session_state.report_history:
         st.session_state.report_history = []
         st.warning("All history cleared!")
         st.rerun()
-        
 else:
     st.info("No reports in history yet. Save your first report above!")
 
@@ -669,16 +637,13 @@ with col3:
     draft_length = len(st.session_state.report_draft)
     st.metric("Current Draft", f"{draft_length} chars")
 
-# Recent Drafts
 st.subheader("💾 Recent Drafts")
 if st.session_state.report_draft:
     st.caption("Your current draft (auto-saved):")
     st.code(st.session_state.report_draft[:300] + "..." if len(st.session_state.report_draft) > 300 else st.session_state.report_draft, language="text")
     
-    # Auto-save timestamp
     if 'last_save_time' in st.session_state:
         last_save_str = st.session_state.last_save_time.strftime("%H:%M:%S")
         st.caption(f"Last auto-save: {last_save_str}")
 else:
     st.caption("Start typing in the left column. Your draft will auto-save every 30 seconds.")
-
