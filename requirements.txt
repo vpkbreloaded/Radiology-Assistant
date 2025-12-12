@@ -4,3 +4,5 @@ pydicom>=2.4.0
 pandas>=2.0.0
 numpy>=1.24.0
 plotly>=5.17.0
+perplexityai>=0.22.0
+
