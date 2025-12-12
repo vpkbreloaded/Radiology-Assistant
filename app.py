@@ -15,7 +15,99 @@ import os
 import datetime
 import hashlib
 from collections import defaultdict
-from perplexityai import PerplexitySync
+# ===== PERPLEXITY AI INTEGRATION =====
+class PerplexityAIHelper:
+    """Helper class for Perplexity AI integration."""
+    
+    def __init__(self, api_key=None):
+        self.api_key = api_key or PERPLEXITY_API_KEY
+        self.client = None
+        if self.api_key:
+            try:
+                # Try to import the perplexity package
+                from perplexity import Perplexity
+                self.client = Perplexity(api_key=self.api_key)
+                print("✅ Perplexity AI Connected!")
+            except ImportError as e:
+                print(f"❌ Import error: {str(e)}")
+                print("💡 Please install: pip install perplexity-api")
+                st.warning("AI features disabled. Please install: `pip install perplexity-api`")
+            except Exception as e:
+                print(f"❌ Failed to initialize Perplexity AI: {str(e)}")
+    
+    def is_available(self):
+        """Check if Perplexity AI is available."""
+        return self.client is not None
+    
+    def generate_report_from_findings(self, findings_text, modality="MRI", contrast="Without contrast", style="Standard"):
+        """Generate a complete radiology report from findings."""
+        if not self.client or not findings_text.strip():
+            return None
+        
+        try:
+            # Define style prompts
+            style_prompts = {
+                "Standard": "Create a standard professional radiology report.",
+                "Detailed": "Provide a detailed report with comprehensive descriptions.",
+                "Concise": "Be very concise while covering essential findings.",
+                "Teaching": "Include teaching points and explanations suitable for trainees."
+            }
+            
+            prompt = f"""You are a senior board-certified radiologist. Generate a structured radiology report based on these findings:
+
+MODALITY: {modality}
+CONTRAST: {contrast}
+
+CLINICAL FINDINGS PROVIDED:
+{findings_text}
+
+{style_prompts.get(style, "Create a standard professional radiology report.")}
+
+Please generate a complete radiology report with the following structure:
+
+TECHNIQUE:
+- Briefly describe the imaging technique
+
+FINDINGS:
+- Organize findings by anatomical region/system
+- Use precise radiological terminology
+- Include measurements when appropriate
+- Note any comparisons with prior studies
+
+IMPRESSION:
+- Numbered conclusions (1-4 points)
+- Clinical recommendations
+- Follow-up suggestions if indicated
+
+Use proper medical terminology. Format with clear headings. Be professional and accurate."""
+            
+            # For perplexity-api package version 0.2.2
+            response = self.client.messages.create(
+                model="sonar",
+                messages=[
+                    {"role": "system", "content": "You are a senior radiologist assistant specializing in creating structured, professional radiology reports. Always use proper medical terminology and follow standard report formatting."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=2000
+            )
+            
+            # Extract response - check different possible response structures
+            if hasattr(response, 'choices') and len(response.choices) > 0:
+                if hasattr(response.choices[0], 'message'):
+                    return response.choices[0].message.content
+                elif hasattr(response.choices[0], 'text'):
+                    return response.choices[0].text
+            elif hasattr(response, 'content'):
+                return response.content
+            elif hasattr(response, 'text'):
+                return response.text
+            else:
+                # Try to convert to string
+                return str(response)
+            
+        except Exception as e:
+            st.error(f"AI generation error: {str(e)}")
+            return None
 from dotenv import load_dotenv
 
 # ===== LOAD ENVIRONMENT VARIABLES =====
@@ -1003,3 +1095,4 @@ def main():
 # ===== RUN APPLICATION =====
 if __name__ == "__main__":
     main()
+
